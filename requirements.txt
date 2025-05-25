@@ -1,0 +1,14 @@
+discord.py
+torch
+pymilvus
+python-dotenv
+llama-index
+google-genai
+sentencepiece
+transformers>=4.48.0
+sentence-transformers>=2.2.0
+accelerate
+llama-index-embeddings-huggingface
+llama-index-llms-gemini
+llama-index-vector-stores-milvus
+dateparser
