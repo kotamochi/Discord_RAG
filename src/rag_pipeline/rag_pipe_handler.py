@@ -198,8 +198,8 @@ class RAGPipelineHandler:
             )
 
             logger.info(f"Milvusから {len(results)} 件のノードを取得しました。")
-            
-            if results:
+
+            if results[0] != []:
                 documents = []
                 for result in results[0]:
                     documents.append({
@@ -221,7 +221,9 @@ class RAGPipelineHandler:
               query_text: str, 
               filter_channel: Optional[str] = None, 
               filter_user: Optional[str] = None, 
-              guild_id: Optional[str] = None) -> Dict[str, Any]: # New
+              guild_id: Optional[str] = None,
+              filter_date_from: Optional[int] = None,
+              filter_date_to: Optional[int] = None) -> Dict[str, Any]: # New
         """
         ユーザーからの質問に対してRAGパイプラインを実行し、応答と参照元情報を返す。
 
@@ -235,7 +237,7 @@ class RAGPipelineHandler:
             Dict[str, Any]: LLMによって生成された回答と、参照元のソース情報を含む辞書。
                             例: {"answer": "回答文", "sources": [source_dict_1, ...]}
         """
-        logger.info(f"RAG query処理開始: '{query_text}', チャンネル: {filter_channel}, ユーザー: {filter_user}, Guild ID: {guild_id}")
+        logger.info(f"RAG query処理開始: '{query_text}', チャンネル: {filter_channel}, ユーザー: {filter_user}, Guild ID: {guild_id}, 日付フィルター: {filter_date_from} から {filter_date_to}")
 
         if not self.llm_model_name: # client のチェックではなく、モデル名が設定されているかで判定
             logger.error("LLMモデル名が設定されていません。処理を中断します。")
@@ -270,9 +272,18 @@ class RAGPipelineHandler:
 
             # Gemini が関数呼び出しを要求してきた場合
             if tool_call.name == "search_milvus":
-                extracted_start_ts = tool_call.args["start_timestamp_ms"] if "start_timestamp_ms" in tool_call.args else None
-                extracted_end_ts = tool_call.args["end_timestamp_ms"] if "end_timestamp_ms" in tool_call.args else None
-                
+
+                # 日付フィルターが直接指定されている場合は、そっちを優先
+                if filter_date_from:
+                    extracted_start_ts = filter_date_from
+                else:
+                    extracted_start_ts = tool_call.args["start_timestamp_ms"] if "start_timestamp_ms" in tool_call.args else None
+
+                if filter_date_to:
+                    extracted_end_ts = filter_date_to
+                else:
+                    extracted_end_ts = tool_call.args["end_timestamp_ms"] if "end_timestamp_ms" in tool_call.args else None
+
                 logger.info(f"Geminiが関数 'search_milvus' の呼び出しを要求しました。 日付フィルター: {extracted_start_ts} から {extracted_end_ts}")
                 search_result = self.search_milvus(
                     tool_call.args["search_query"],
