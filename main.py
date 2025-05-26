@@ -1,30 +1,30 @@
 import discord
-from discord import app_commands # 追加
+from discord import app_commands
 import asyncio
 import logging
 import os
-import traceback # エラー通知のため追加
-import json # 追加: クロール済みギルドIDの読み書きのため
-from typing import Optional, Set # Optional, Set を追加
+from datetime import datetime
+import traceback
+import json
+from typing import Optional, Set
 
 from src.config import ( # 設定値をまとめてインポート
-    DISCORD_BOT_TOKEN,
-    DISCORD_ADMIN_ID,
+    DISCORD_BOT_TOKEN, # ボットトークン
+    DISCORD_ADMIN_ID, # 管理者ID
     EMBEDDING_MODEL_NAME, # Embedder, MilvusHandlerで使用
     CHUNK_SIZE,           # Chunkerで使用
     CHUNK_OVERLAP,        # Chunkerで使用
     MAX_MESSAGES_PER_CHANNEL, # DiscordCrawlerで使用
-    SIMILARITY_TOP_K, # 追加
-    CRAWLED_GUILDS_FILE, # 追加: クロール済みギルドファイル
-    MILVUS_COLLECTION_NAME # 追加: Milvusコレクション名
+    SIMILARITY_TOP_K, # RAGPipelineHandlerで使用
+    CRAWLED_GUILDS_FILE, # クロール済みギルドファイル
+    MILVUS_COLLECTION_NAME # Milvusコレクション名
 )
 from src.rag_pipeline.rag_pipe_handler import RAGPipelineHandler
-from src.data_collection.discord_crawler import DiscordCrawler # 過去ログ収集用 (バッチ実行)
-from src.data_processing.cleaner import clean_messages # 追加
-from src.data_processing.chunker import chunk_messages # 追加
-from src.embedding.embedder import MessageEmbedder # 追加
+from src.data_collection.discord_crawler import DiscordCrawler
+from src.data_processing.cleaner import clean_messages
+from src.data_processing.chunker import chunk_messages
+from src.embedding.embedder import MessageEmbedder
 from src.vector_store.milvus_handler import MilvusHandler
-from pymilvus import utility
 
 # ロガー設定
 logging.basicConfig(
@@ -37,15 +37,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# discordクライアント設定
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
-intents.members = True # member関連のイベントを取得する場合 (今は不要かも)
-
-
+intents.members = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client) # CommandTreeを初期化
-rag_handler: RAGPipelineHandler | None = None
 crawled_guild_ids: Set[int] = set() # クロール済みギルドIDを保持するセット
 
 
@@ -54,11 +52,30 @@ try:
     logger.info("Initializing MessageEmbedder globally...")
     message_embedder = MessageEmbedder(model_name=EMBEDDING_MODEL_NAME)
     logger.info("MessageEmbedder initialized successfully globally.")
+
 except Exception as e:
     message_embedder = None # 初期化失敗時はNoneに設定
     logger.critical(f"Failed to initialize MessageEmbedder globally: {e}", exc_info=True)
-    # ここでプログラムを終了させるか、Noneのままにして起動時にチェックする
-    # 今回はNoneのままにし、main()でチェックして終了させる
+
+try:
+    logger.info(f"Initializing RAG Pipeline Handler with Milvus collection: {MILVUS_COLLECTION_NAME}...")
+    rag_handler = RAGPipelineHandler(
+        milvus_collection_name=MILVUS_COLLECTION_NAME,
+        similarity_top_k=SIMILARITY_TOP_K
+    )
+    logger.info(f"RAG Pipeline Handler initialized successfully with collection: {rag_handler.milvus_collection_name}")
+
+except Exception as e:
+    rag_handler = None
+    logger.error(f"Failed to initialize RAG Pipeline Handler: {e}", exc_info=True)
+
+
+async def close_bot():
+    """botを終了させる"""
+    if client:
+        logger.info("Closing bot...")
+        await asyncio.create_task(client.close())
+
 
 def load_crawled_guilds():
     """クロール済みギルドIDをファイルから読み込む"""
@@ -111,30 +128,17 @@ async def on_ready():
 
     load_crawled_guilds() # クロール済みギルドIDをロード
 
-    # MessageEmbedderが初期化失敗している場合は、ここで管理者通知も可能
-    if message_embedder is None and DISCORD_ADMIN_ID: # on_readyでmessage_embedderの状態をチェック
-        try:
-            admin_user = await client.fetch_user(int(DISCORD_ADMIN_ID))
-            if admin_user:
-                await admin_user.send("[Bot Critical Error] MessageEmbedder failed to initialize during startup. RAG features will not work.")
-                logger.info("Sent MessageEmbedder initialization failure notification to admin via on_ready.")
-        except Exception as notify_e:
-            logger.error(f"Failed to send MessageEmbedder init failure notification: {notify_e}", exc_info=True)
-            if DISCORD_ADMIN_ID:
-                await notify_admin_on_startup_error(client, "MessageEmbedder", e)
+    # MessageEmbedderが初期化失敗している場合は、ここで管理者通知
+    if message_embedder is None and DISCORD_ADMIN_ID:
+        await notify_admin_on_startup_error(client, "MessageEmbedder", e)
+        # botを終了させる
+        await close_bot()
 
-    # RAG Handler の初期化
-    try:
-        logger.info(f"Initializing RAG Pipeline Handler with Milvus collection: {MILVUS_COLLECTION_NAME}...")
-        rag_handler = RAGPipelineHandler(
-            milvus_collection_name=MILVUS_COLLECTION_NAME,
-            similarity_top_k=SIMILARITY_TOP_K
-        )
-        logger.info(f"RAG Pipeline Handler initialized successfully with collection: {rag_handler.milvus_collection_name}")
-    except Exception as e:
-        logger.error(f"Failed to initialize RAG Pipeline Handler: {e}", exc_info=True)
-        if DISCORD_ADMIN_ID:
-            await notify_admin_on_startup_error(client, "RAG Pipeline Handler", e)
+    # RAG Handlerが初期化失敗している場合は、ここで管理者通知
+    if rag_handler is None and DISCORD_ADMIN_ID:
+        await notify_admin_on_startup_error(client, "RAG Pipeline Handler", e)
+        # botを終了させる
+        await close_bot()
                 
     # スラッシュコマンドを同期
     try:
@@ -142,6 +146,7 @@ async def on_ready():
         logger.info("Slash commands synced successfully.")
     except Exception as e:
         logger.error(f"Failed to sync slash commands: {e}", exc_info=True)
+
 
 @client.event
 async def on_message(message: discord.Message):
@@ -156,6 +161,7 @@ async def on_message(message: discord.Message):
         else:
             logger.debug(f"Ignoring new message in non-crawled guild '{message.guild.name}' (ID: {message.guild.id}).")
     # 以前のメンションベースのコマンド処理、ヘルプ処理、crawl_history処理は削除 (スラッシュコマンドへ移行)
+
 
 async def notify_admin_on_error(client: discord.Client, context_message: str, error: Exception):
     """エラー情報を管理者にDMで通知する"""
@@ -172,6 +178,7 @@ async def notify_admin_on_error(client: discord.Client, context_message: str, er
                 await admin_user.send(f"[Bot Error] {error_details}")
         except Exception as notify_e:
             logger.error(f"Failed to send error notification to admin: {notify_e}", exc_info=True)
+
 
 async def process_new_message_pipeline(message: discord.Message):
     """
@@ -417,6 +424,7 @@ async def run_crawl_and_process_pipeline(channel: Optional[discord.TextChannel |
         await progress_channel.send(f"履歴収集・処理中にエラーが発生しました。管理者、もしくは開発者にお問い合わせください。")
         await notify_admin_on_error(client, f"Crawl & Process Pipeline Failed. Guild: {guild.name}({guild.id})", e)
 
+
 # --- スラッシュコマンドの定義 --- #
 
 @tree.command(name="help", description="Botが提供するスラッシュコマンドの一覧と、それぞれの使用方法に関するヘルプ情報を表示します。")
@@ -439,7 +447,10 @@ async def help_command(interaction: discord.Interaction):
         value="`質問文`: 検索したい内容を自然言語で入力します。(必須)\n"
               "`channel`: 特定のチャンネル名またはIDで検索範囲を限定します。(任意)\n"
               "`user`: 特定のユーザー名またはIDで検索範囲を限定します。(任意)\n"
-              "**注:** `/search` コマンドを利用するには、事前に管理者が対象サーバーで `/crawl_history` を実行している必要があります。", # 注意書き追加
+              "`date_from`: 検索開始日をYYYY-MM-DD形式で指定します。(任意)\n"
+              "`date_to`: 検索終了日をYYYY-MM-DD形式で指定します。(任意)\n"
+              "**注:** `/search` コマンドを利用するには、事前に管理者が対象サーバーで `/crawl_history` を実行している必要があります。\n"
+              "date_from,toは片方を入力する事でその日付以降,以前を検索できます。", # 注意書き追加
         inline=False
     )
     help_embed.add_field(
@@ -457,11 +468,13 @@ async def help_command(interaction: discord.Interaction):
 @app_commands.describe(
     query="検索したい質問文",
     channel="検索対象のチャンネル (任意)",
-    user="検索対象のユーザー (任意)"
+    user="検索対象のユーザー (任意)",
+    date_from="検索日(○○以降 YYYY-MM-DD形式 任意)",
+    date_to="~検索日(○○以前 YYYY-MM-DD形式 任意)"
 )
-async def search_command(interaction: discord.Interaction, query: str, channel: Optional[discord.TextChannel] = None, user: Optional[discord.User] = None):
-    logger.info(f"Executing /search command for {interaction.user.name}. Guild: {interaction.guild.name if interaction.guild else 'DM'}. Query: '{query}', Channel: {channel.name if channel else 'None'}, User: {user.name if user else 'None'}")
-    
+async def search_command(interaction: discord.Interaction, query: str, channel: Optional[discord.TextChannel] = None, user: Optional[discord.User] = None, date_from: Optional[str] = None, date_to: Optional[str] = None):
+    logger.info(f"Executing /search command for {interaction.user.name}. Guild: {interaction.guild.name if interaction.guild else 'DM'}. Query: '{query}', Channel: {channel.name if channel else 'None'}, User: {user.name if user else 'None'}, Date From: {date_from}, Date To: {date_to}")
+
     if not interaction.guild:
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
         return
@@ -486,13 +499,29 @@ async def search_command(interaction: discord.Interaction, query: str, channel: 
         # フィルタ用のIDを取得
         filter_channel_id_str = str(channel.id) if channel else None
         filter_user_id_str = str(user.id) if user else None
+        # 日付のフォーマットチェックと変換
+        try:
+            filter_date_from_timestamp = int(datetime.strptime(date_from, "%Y-%m-%d").timestamp() * 1000) if date_from else None  # ミリ秒に変換
+            filter_date_to_timestamp = int(datetime.strptime(date_to, "%Y-%m-%d").timestamp() * 1000) if date_to else None  # ミリ秒に変換
+        except ValueError:
+            logger.error(f"Invalid date format: {date_from} - {date_to}")
+            await interaction.response.send_message("無効な日付形式です。YYYY-MM-DD形式で指定してください。", ephemeral=True)
+            return
+
+        # 日付の順序チェックを追加
+        if filter_date_from_timestamp is not None and filter_date_to_timestamp is not None:
+            if filter_date_to_timestamp < filter_date_from_timestamp:
+                await interaction.response.send_message("「検索終了日」が「検索開始日」より前の日付になっています。", ephemeral=True)
+                return
 
         result = await asyncio.to_thread(
             rag_handler.query,
             query_text=query, 
             filter_channel=filter_channel_id_str,
             filter_user=filter_user_id_str,
-            guild_id=str(interaction.guild.id)
+            guild_id=str(interaction.guild.id),
+            filter_date_from=filter_date_from_timestamp,
+            filter_date_to=filter_date_to_timestamp
         )
         answer = result.get("answer", "すみません、うまく応答を生成できませんでした。")
 
@@ -519,6 +548,7 @@ async def search_command(interaction: discord.Interaction, query: str, channel: 
             f"/search command processing failed. User: {interaction.user.name}, Query: '{query}', Channel: {channel.name if channel else 'None'}, User: {user.name if user else 'None'}",
             e
         )
+
 
 @tree.command(name="crawl_history", description="[管理者専用] Discordサーバーの過去ログを収集・処理します。")
 @app_commands.describe(
@@ -579,16 +609,11 @@ async def crawl_history_command_error(interaction: discord.Interaction, error: a
         await interaction.response.send_message("コマンドの実行中にエラーが発生しました。", ephemeral=True)
         await notify_admin_on_error(client, f"/crawl_history command failed. User: {interaction.user.name}", error)
 
+
 def main():
     if not DISCORD_BOT_TOKEN:
         logger.critical("DISCORD_BOT_TOKEN is not set. Bot cannot start.")
         return
-
-    if message_embedder is None:
-        logger.critical("MessageEmbedder failed to initialize. Bot cannot start as RAG features depend on it.")
-        # ここで非同期の管理者通知は難しいので、ログ出力で致命的エラーを示す
-        # on_ready での通知も検討したが、そもそもBotが起動しないので on_ready に到達しない
-        return # Botを起動しない
 
     try:
         logger.info("Starting Bot...")
