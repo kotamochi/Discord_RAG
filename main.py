@@ -623,5 +623,6 @@ def main():
     except Exception as e:
         logger.critical(f"An unexpected error occurred while starting the bot: {e}", exc_info=True)
 
+
 if __name__ == "__main__":
-    main() 
+    main()
