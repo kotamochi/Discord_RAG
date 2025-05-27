@@ -6,27 +6,6 @@ from src.config import CHUNK_SIZE, CHUNK_OVERLAP, EMBEDDING_MODEL_NAME
 
 logger = logging.getLogger(__name__)
 
-# Embeddingモデルに応じたプレフィックス処理
-# (将来的にはモデル名から動的にプレフィックスを決定するロジックも検討)
-DEFAULT_QUERY_PREFIX = "query: "
-DEFAULT_PASSAGE_PREFIX = "passage: "
-
-# ruri-v3-310m 用のプレフィックス
-RURI_QUERY_PREFIX = "検索クエリ: "
-RURI_PASSAGE_PREFIX = "検索文書: "
-
-def get_prefix_for_embedding_model(model_name: str) -> tuple[str, str]:
-    """Embeddingモデル名に基づいてクエリとパッセージのプレフィックスを返す"""
-    model_name_lower = model_name.lower()
-    if "e5-large-instruct" in model_name_lower:
-        return DEFAULT_QUERY_PREFIX, DEFAULT_PASSAGE_PREFIX
-    elif "ruri-v3" in model_name_lower: # ruri-v3 シリーズを想定
-        return RURI_QUERY_PREFIX, RURI_PASSAGE_PREFIX
-    # 他のモデルに対応する場合はここに追加
-    return "", "" # デフォルトはプレフィックスなし
-
-query_prefix, passage_prefix = get_prefix_for_embedding_model(EMBEDDING_MODEL_NAME)
-
 def chunk_messages(cleaned_messages: List[Dict[str, Any]], chunk_size: int = CHUNK_SIZE, chunk_overlap: int = CHUNK_OVERLAP) -> List[Dict[str, Any]]:
     """
     クリーニングされたメッセージリストをチャンクに分割し、メタデータを付与する。

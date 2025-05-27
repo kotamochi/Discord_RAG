@@ -15,9 +15,9 @@ from src.vector_store.milvus_handler import MilvusHandler # MilvusHandler をイ
 from src.embedding.embedder import MessageEmbedder # MessageEmbedder をインポート
 
 # Google Gen AI SDK を使用したAPI呼び出し
-from google import genai # 新SDK
-from google.genai import types # 新SDK
-from google.genai import errors # 新SDK。エラーは errors.BlockedPromptError のように参照
+from google import genai
+from google.genai import types
+from google.genai import errors
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ class RAGPipelineHandler:
     """
     def __init__(self,
                  milvus_collection_name: str = MILVUS_COLLECTION_NAME,
-                 embedding_model_name: str = EMBEDDING_MODEL_NAME,
+                 embedding_model: MessageEmbedder = None,
                  llm_model_name: str = LLM_MODEL_NAME, # Gemini APIで使用するモデル名
                  milvus_dim: int = EMBEDDING_MODEL_DIMENSION, # DEFAULT_DIMENSION を EMBEDDING_MODEL_DIMENSION に変更
                  similarity_top_k: int = SIMILARITY_TOP_K, # main.pyのconfigから渡される値で上書き
@@ -47,7 +47,7 @@ class RAGPipelineHandler:
 
         Args:
             milvus_collection_name (str): Milvusコレクション名。
-            embedding_model_name (str): 使用する埋め込みモデル名。
+            embedding_model (MessageEmbedder): 使用する埋め込みモデル。
             llm_model_name (str): 使用するLLMモデル名 (Gemini API用)。
             milvus_dim (int): Milvusベクトルストアの次元数。
             similarity_top_k (int): ベクトル検索時に取得する上位K件。
@@ -55,7 +55,7 @@ class RAGPipelineHandler:
         """
         logger.info(f"RAGPipelineHandlerを初期化中... similarity_top_k: {similarity_top_k}")
         self.milvus_collection_name = milvus_collection_name
-        self.embedding_model_name = embedding_model_name
+        self.embedding_model = embedding_model
         self.llm_model_name = llm_model_name 
         self.milvus_dim = milvus_dim
         self.similarity_top_k = similarity_top_k
@@ -63,24 +63,22 @@ class RAGPipelineHandler:
         # LLM生成時の温度設定
         self.temperature = LLM_TEMPERATURE
 
-        if not GEMINI_API_KEY:
-            raise ValueError("環境変数 GEMINI_API_KEY が設定されていません。")
-        
-        # Google Gen AI SDK クライアントを初期化
-        self.client = genai.Client(api_key=GEMINI_API_KEY) # genai.Client を使用
-        logger.info(f"Google Gen AI SDKクライアントを初期化しました。")
-
+        # Google Gen AI SDK クライアントの初期化
         try:
-            logger.info(f"Initializing MessageEmbedder with model: {self.embedding_model_name}")
-            embedder_instance = MessageEmbedder(model_name=self.embedding_model_name)
-            self.embed_model = embedder_instance.model # MessageEmbedderが持つHuggingFaceEmbeddingインスタンスを使用
-            if not self.embed_model:
-                # このチェックはMessageEmbedderのコンストラクタでエラーが発生すれば到達しないはずだが念のため
-                raise ValueError("Failed to get a valid embedding model from MessageEmbedder.") 
-            logger.info(f"Embedding model (via MessageEmbedder) '{self.embedding_model_name}' initialized successfully.")
+            if not GEMINI_API_KEY:
+                raise ValueError("環境変数 GEMINI_API_KEY が設定されていません。")
+            
+            self.client = genai.Client(api_key=GEMINI_API_KEY)
+            logger.info(f"Google Gen AI SDKクライアントを初期化しました。")
         except Exception as e:
-            logger.error(f"Failed to initialize embedding model via MessageEmbedder: {e}", exc_info=True)
+            logger.error(f"Google Gen AI SDKクライアントの初期化に失敗しました: {e}", exc_info=True)
             raise
+
+        # 埋め込みモデルの確認
+        if not self.embedding_model:
+            # このチェックはMessageEmbedderのコンストラクタでエラーが発生すれば到達しないはずだが念のため
+            raise ValueError("Failed to get a valid embedding model from MessageEmbedder.")
+        logger.info(f"Embedding model (via MessageEmbedder) '{self.embedding_model.name}' initialized successfully.")
 
         # ベクトルストア (MilvusVectorStore) の初期化
         try:
@@ -146,7 +144,7 @@ class RAGPipelineHandler:
         
         logger.info(f"関数呼び出し: search_milvus (検索クエリ: '{search_query}', チャンネル: {channel_filter}, ユーザー: {user_filter}, Guild ID: {guild_id}, StartTS: {start_timestamp_ms}, EndTS: {end_timestamp_ms})")
         
-        if not self.embed_model:
+        if not self.embedding_model:
             logger.error("埋め込みモデルが初期化されていません (search_milvus内)。")
             return [{"error": "埋め込みモデルが初期化されていません。"}]
         if not self.milvus_handler:
@@ -177,13 +175,19 @@ class RAGPipelineHandler:
             filter_expr = " and ".join(filters_list) if filters_list else None
 
             # 埋め込みベクトルの生成
-            embs = []
             # search_query が文字列の場合とリストの場合があり得るため、リストに統一
             query_keywords = [search_query] if isinstance(search_query, str) else search_query
-            for kw in query_keywords:
-                embs.append(self.embed_model.get_query_embedding(kw))
+            
+            if query_keywords:
+                # MessageEmbedder の query_prefix_for_model を使用して、エンコード用のテキストリストを作成
+                # self.embedding_model は MessageEmbedder のインスタンスであると仮定
+                texts_for_embedding = [self.embedding_model.query_prefix_for_model + kw for kw in query_keywords]
+                
+                # MessageEmbedder の model を直接使用して一括エンコード
+                raw_embeddings = self.embedding_model.embed_text(texts_for_embedding)
+            
             # キーワード毎の埋め込みを平均
-            embedding = [mean(vals) for vals in zip(*embs)] if embs else []
+            embedding = [mean(vals) for vals in zip(*raw_embeddings)] if raw_embeddings else []
             
             if not embedding:
                 logger.warning("Embedding for search_query resulted in an empty list. Skipping Milvus query.")

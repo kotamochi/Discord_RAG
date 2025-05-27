@@ -1,15 +1,10 @@
 import logging
 from typing import List, Dict, Any
 from pymilvus import connections, utility, Collection, CollectionSchema, FieldSchema, DataType
-from src.config import MILVUS_HOST, MILVUS_PORT, EMBEDDING_MODEL_DIMENSION # EMBEDDING_MODEL_NAME を EMBEDDING_MODEL_DIMENSION に変更
+from src.config import MILVUS_HOST, MILVUS_PORT, EMBEDDING_MODEL_DIMENSION, MILVUS_ALIAS
 
 logger = logging.getLogger(__name__)
 
-# グローバルなMilvus接続エイリアス
-MILVUS_ALIAS = "default"
-
-# Embeddingモデル名から次元数を取得するロジックは削除
-# DEFAULT_DIMENSION = MODEL_DIMENSIONS.get(EMBEDDING_MODEL_NAME, 768) # 削除
 
 class MilvusHandler:
     def __init__(self, collection_name: str, embedding_dim: int = EMBEDDING_MODEL_DIMENSION, alias: str = MILVUS_ALIAS):
@@ -25,6 +20,7 @@ class MilvusHandler:
         self._connect()
         self._create_collection_if_not_exists()
 
+
     def _connect(self):
         """Milvusサーバーに接続する"""
         try:
@@ -34,6 +30,7 @@ class MilvusHandler:
         except Exception as e:
             logger.error(f"Failed to connect to Milvus: {e}", exc_info=True)
             raise
+
 
     def _create_collection_if_not_exists(self):
         """
@@ -182,6 +179,7 @@ class MilvusHandler:
             logger.error(f"Failed to insert data into Milvus. Type: {type(e).__name__}, Message: {getattr(e, 'message', str(e))}", exc_info=True)
             return None
 
+
     def count_entities(self) -> int:
         """コレクション内のエンティティ数を返す"""
         if not self.collection:
@@ -194,6 +192,7 @@ class MilvusHandler:
         except Exception as e:
             logger.error(f"Failed to count entities in Milvus: {e}", exc_info=True)
             return 0
+
 
     def delete_collection(self):
         """現在のインスタンスが指すコレクションを削除する"""

@@ -8,18 +8,14 @@ services:
       - .env
     volumes:
       - .:/app  # ローカルの変更をコンテナに即時反映
-      # HuggingFaceモデルキャッシュを永続化 (任意)
-      # sentence-transformersのモデルダウンロード先をホストと共有
-      - ./cache/huggingface_cache:/root/.cache/huggingface/hub
     ports:
       - "8000:8000" # 将来的にAPIなどを公開する場合 (任意)
     depends_on:
       milvus:
-        # condition: service_healthy
-        condition: service_started # service_healthy から service_started に変更
+        condition: service_started
     restart: unless-stopped
-    tty: true # コンテナが即時終了するのを防ぐ (tail -f /dev/null と併用)
-    stdin_open: true # 同上
+    # tty: true # コンテナが即時終了するのを防ぐ (tail -f /dev/null と併用)
+    # stdin_open: true # 同上
 
   milvus:
     image: milvusdb/milvus:v2.4.4 # イメージを v2.4.4 に戻す
@@ -32,7 +28,7 @@ services:
       - ./data/milvus:/var/lib/milvus # Milvusデータ永続化
     environment:
       ETCD_USE_EMBED: "true" # スタンドアロンモードでEtcdを内包
-      ETCD_DATA_DIR: "/var/lib/milvus/etcd"
+      ETCD_DATA_DIR: "/var/lib/milvus/etcd" # Milvusデータ永続化
       COMMON_STORAGETYPE: "local" # ローカルストレージを使用
       # GPUを使用しない場合は下記を設定 (任意、環境に応じて)
       # MILVUS_GPU_ENABLED: "false"
@@ -40,4 +36,3 @@ services:
 
 volumes:
   milvus_data:
-  huggingface_cache: 

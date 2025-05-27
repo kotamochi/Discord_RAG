@@ -68,6 +68,7 @@ try:
     logger.info(f"Initializing RAG Pipeline Handler with Milvus collection: {MILVUS_COLLECTION_NAME}...")
     rag_handler = RAGPipelineHandler(
         milvus_collection_name=MILVUS_COLLECTION_NAME,
+        embedding_model=message_embedder,
         similarity_top_k=SIMILARITY_TOP_K
     )
     logger.info(f"RAG Pipeline Handler initialized successfully with collection: {rag_handler.milvus_collection_name}")
@@ -375,7 +376,6 @@ async def run_crawl_and_process_pipeline(channel: Optional[discord.TextChannel |
         
         # 5. エンベディング
         await progress_channel.send(f"**ステップ4/5: エンベディング生成開始...**")
-        global message_embedder # グローバル変数を参照
         if not message_embedder:
             logger.error("MessageEmbedder is not initialized. Cannot run crawl and process pipeline.")
             await progress_channel.send("エラー: エンベディングモデルが初期化されていません。管理者に連絡してください。")
