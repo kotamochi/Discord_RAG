@@ -14,6 +14,7 @@ MILVUS_HOST = os.getenv("MILVUS_HOST", "milvus")
 MILVUS_PORT = os.getenv("MILVUS_PORT", "19530")
 MILVUS_COLLECTION_NAME = os.getenv("MILVUS_COLLECTION_NAME", "sever_meglog_collection")
 SIMILARITY_TOP_K = 20
+MILVUS_ALIAS = "default"
 
 # Bot Configuration
 DISCORD_ADMIN_ID = os.getenv("DISCORD_ADMIN_ID", "admin_ID")  # Default to placeholder

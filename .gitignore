@@ -151,4 +151,7 @@ crawled_guilds.json
 logs/
 
 # database files
-data/
+data/milvus/data/
+data/milvus/etcd/
+data/milvus/rdb_data/
+data/milvus/rdb_data_meta_kv/
