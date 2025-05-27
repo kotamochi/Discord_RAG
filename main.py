@@ -26,13 +26,20 @@ from src.data_processing.chunker import chunk_messages
 from src.embedding.embedder import MessageEmbedder
 from src.vector_store.milvus_handler import MilvusHandler
 
+
+
 # ロガー設定
+# ログディレクトリが存在しない場合は作成
+log_dir = "logs"
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - [%(levelname)s] - %(name)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("logs/bot.log")
+        logging.FileHandler(os.path.join(log_dir, "bot.log"))
     ]
 )
 logger = logging.getLogger(__name__)

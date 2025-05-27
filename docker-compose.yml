@@ -10,7 +10,7 @@ services:
       - .:/app  # ローカルの変更をコンテナに即時反映
       # HuggingFaceモデルキャッシュを永続化 (任意)
       # sentence-transformersのモデルダウンロード先をホストと共有
-      - huggingface_cache:/root/.cache/huggingface
+      - ./cache/huggingface_cache:/root/.cache/huggingface/hub
     ports:
       - "8000:8000" # 将来的にAPIなどを公開する場合 (任意)
     depends_on:
@@ -29,18 +29,13 @@ services:
       - "19530:19530" # Milvus gRPC port
       - "9091:9091"   # Milvus metrics port (optional)
     volumes:
-      - milvus_data:/milvus/data # Milvusデータ永続化
+      - ./data/milvus:/var/lib/milvus # Milvusデータ永続化
     environment:
       ETCD_USE_EMBED: "true" # スタンドアロンモードでEtcdを内包
       ETCD_DATA_DIR: "/var/lib/milvus/etcd"
       COMMON_STORAGETYPE: "local" # ローカルストレージを使用
       # GPUを使用しない場合は下記を設定 (任意、環境に応じて)
       # MILVUS_GPU_ENABLED: "false"
-    # healthcheck:  # <--- コメントアウト
-    #   test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
-    #   interval: 30s
-    #   timeout: 20s
-    #   retries: 3
     restart: unless-stopped
 
 volumes:
